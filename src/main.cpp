@@ -22,17 +22,17 @@ class AnimatedTreeDrawer {
     int screenWidth, screenHeight;
     int groundLevel;
     int seedX, seedY;
-    std::vector<Point> grassPositions;
 
     // Animation state variables
     double treeGrowthScale;
     double flowerScale;
     bool showFlowers;
+    int flowerPosX, flowerPosY;
+    std::vector<Point> flowerPositions;
     std::vector<Seed> fallingSeeds;
     int animationPhase;  // 0: seed germination, 1: tree growth, 2: flowering, 3: seed fall, 4: reset
     int phaseTimer;
-    bool grassInitialized;
-
+    int rightmostBranchX, rightmostBranchY;
     double zoomScale;
     int cameraOffsetX, cameraOffsetY;
 
@@ -46,38 +46,45 @@ class AnimatedTreeDrawer {
 
     // Draw a seed with rotation
     void drawSeed(int x, int y, double angle, double scale = 1.0) {
-        // Save current settings
         int oldColor = getcolor();
 
-        // Seed is an oval shape
         setcolor(COLOR(160, 82, 45));
         setfillstyle(SOLID_FILL, COLOR(160, 82, 45));
 
-        // Calculate rotated points for seed outline
         int size = static_cast<int>(8 * scale);
-        std::vector<Point> seedPoints;
 
-        for (int i = 0; i < 8; i++) {
-            double t = i * 3.14159 / 4;
-            int localX = static_cast<int>(size * cos(t));
-            int localY = static_cast<int>(size * 0.6 * sin(t));
+        // Draw seed as rotated oval using rotation transformation
+        // Calculate 4 points of the oval and rotate them
+        const int numPoints = 12;
+        int points[numPoints * 2];
 
-            // Apply rotation
+        for (int i = 0; i < numPoints; i++) {
+            double t = i * 2 * 3.14159 / numPoints;
+            // Oval shape (wider than tall)
+            double localX = size * cos(t);
+            double localY = size * 0.5 * sin(t);
+
+            // Apply rotation transformation
             int rotatedX = static_cast<int>(localX * cos(angle) - localY * sin(angle));
             int rotatedY = static_cast<int>(localX * sin(angle) + localY * cos(angle));
 
-            seedPoints.push_back({x + rotatedX, y + rotatedY});
+            points[i * 2] = x + rotatedX;
+            points[i * 2 + 1] = y + rotatedY;
         }
 
-        // Draw seed as filled polygon
-        fillellipse(x, y, static_cast<int>(size), static_cast<int>(size * 0.6));
+        // Fill the rotated seed
+        fillpoly(numPoints, points);
 
-        // Add a small sprout line if germinating
-        if (scale > 1.0) {
-            setcolor(LIGHT_GREEN);
-            int sproutLength = static_cast<int>((scale - 1.0) * 20);
-            line(x, y, x, y - sproutLength);
-        }
+        // Draw a line through the seed to show rotation clearly
+        int lineLength = static_cast<int>(size * 0.8);
+        int lineX1 = x + static_cast<int>(lineLength * cos(angle));
+        int lineY1 = y + static_cast<int>(lineLength * sin(angle));
+        int lineX2 = x - static_cast<int>(lineLength * cos(angle));
+        int lineY2 = y - static_cast<int>(lineLength * sin(angle));
+
+        setcolor(COLOR(100, 50, 20));
+        setlinestyle(SOLID_LINE, 0, std::max(1, static_cast<int>(scale / 3)));
+        line(lineX1, lineY1, lineX2, lineY2);
 
         setcolor(oldColor);
     }
@@ -93,31 +100,12 @@ class AnimatedTreeDrawer {
         setcolor(SOIL_BROWN);
         setfillstyle(SOLID_FILL, SOIL_BROWN);
         bar(0, groundLevel + 50, screenWidth, screenHeight);
-
-        // Generate grass positions only once
-        if (!grassInitialized) {
-            grassPositions.clear();
-            for (int i = 0; i < screenWidth; i += 10) {
-                Point grass;
-                grass.x = i + (rand() % 10 - 5);
-                grass.y = groundLevel - (rand() % 15 + 5);
-                grassPositions.push_back(grass);
-            }
-            grassInitialized = true;
-        }
-
-        // Draw grass using stored positions
-        setcolor(GREEN);
-        for (const auto& grass : grassPositions) {
-            line(grass.x, groundLevel, grass.x, grass.y);
-        }
     }
 
     // Draw a branch recursively with scaling
     void drawBranch(int x1, int y1, double length, double angle, int depth, double scale, double growthProgress = 1.0) {
         if (depth <= 0 || scale <= 0.1) return;
 
-        // Progressive branch growth - branches appear based on depth and progress
         double branchProgress = std::min(1.0, std::max(0.0, (growthProgress * 10) - (8 - depth)));
         if (branchProgress <= 0) return;
 
@@ -125,6 +113,12 @@ class AnimatedTreeDrawer {
 
         int x2 = x1 + static_cast<int>(scaledLength * cos(angle));
         int y2 = y1 - static_cast<int>(scaledLength * sin(angle));
+
+        // Track rightmost position for flower/seed
+        if (depth == 1 && x2 > rightmostBranchX) {
+            rightmostBranchX = x2;
+            rightmostBranchY = y2;
+        }
 
         if (depth > 4) {
             setcolor(BROWN);
@@ -136,7 +130,6 @@ class AnimatedTreeDrawer {
 
         line(x1, y1, x2, y2);
 
-        // Draw leaves throughout the tree, not just at top
         if (depth <= 5 && scale > 0.5 && branchProgress > 0.8) {
             setcolor(LIGHT_GREEN);
             setfillstyle(SOLID_FILL, LIGHT_GREEN);
@@ -150,8 +143,8 @@ class AnimatedTreeDrawer {
             }
         }
 
-        // Draw flowers - smaller and pink
-        if (depth <= 2 && showFlowers && scale > 0.8 && branchProgress > 0.9) {
+        // Draw flowers only at depth 1
+        if (depth == 1 && showFlowers && scale > 0.8 && branchProgress > 0.9) {
             drawFlower(x2, y2, flowerScale);
         }
 
@@ -161,13 +154,17 @@ class AnimatedTreeDrawer {
         drawBranch(x2, y2, newLength * 0.8, angle, depth - 1, scale, growthProgress);
     }
 
-    // Draw a flower with scaling
     void drawFlower(int x, int y, double scale) {
         if (scale <= 0) return;
 
-        int petalSize = static_cast<int>(4 * scale);  // Changed from 5 to 4
+        // Collect all flower positions
+        Point flowerPos;
+        flowerPos.x = x;
+        flowerPos.y = y;
+        flowerPositions.push_back(flowerPos);
 
-        // Pink color instead of magenta
+        int petalSize = static_cast<int>(4 * scale);
+
         setcolor(COLOR(255, 192, 203));
         setfillstyle(SOLID_FILL, COLOR(255, 192, 203));
 
@@ -224,16 +221,18 @@ class AnimatedTreeDrawer {
             if (!seed.active) continue;
 
             // Apply gravity
-            seed.velocityY += 0.5;
+            seed.velocityY += 0.3;  // Slightly slower fall
             seed.y += seed.velocityY;
 
-            // Rotation during fall
-            seed.angle += 0.1;
+            // Wind effect - drift to the right
+            seed.x += 1.5;  // Horizontal wind drift
+
+            // Rotation during fall - faster rotation
+            seed.angle += 0.2;  // Increased from 0.1
 
             // Check if seed hit the ground
             if (seed.y >= groundLevel + 80) {
                 seed.active = false;
-                // This seed will germinate in next cycle
                 seedX = static_cast<int>(seed.x);
                 seedY = groundLevel + 80;
             }
@@ -303,15 +302,16 @@ class AnimatedTreeDrawer {
     AnimatedTreeDrawer()
         : screenWidth(800),
           screenHeight(600),
-          groundLevel(480),  // Changed from 450 to 480
+          groundLevel(480),
           seedX(400),
-          seedY(560),  // Changed from 530 to 560
+          seedY(560),
           treeGrowthScale(0.0),
           flowerScale(0.0),
           showFlowers(false),
           animationPhase(0),
           phaseTimer(0),
-          grassInitialized(false),
+          rightmostBranchX(0),
+          rightmostBranchY(0),
           zoomScale(1.0),
           cameraOffsetX(0),
           cameraOffsetY(0) {}
@@ -332,10 +332,13 @@ class AnimatedTreeDrawer {
         phaseTimer = 0;
         fallingSeeds.clear();
         seedX = screenWidth / 2;
-        seedY = 560;  // Match new seedY value
+        seedY = 560;
         zoomScale = 1.0;
         cameraOffsetX = 0;
         cameraOffsetY = 0;
+        flowerPositions.clear();
+        rightmostBranchX = 0;
+        rightmostBranchY = 0;
     }
 
     void update() {
@@ -373,16 +376,17 @@ class AnimatedTreeDrawer {
                 break;
             }
 
-            case 3: {                   // Flowering (0-25 frames) - VERY FAST
-                if (phaseTimer < 25) {  // Changed from 50 to 25
+            case 3: {  // Flowering (0-25 frames)
+                if (phaseTimer < 25) {
                     flowerScale = phaseTimer / 25.0;
                 } else {
                     animationPhase = 4;
                     phaseTimer = 0;
 
+                    // Create seed at rightmost branch tip (where flowers are)
                     Seed newSeed;
-                    newSeed.x = seedX + 50;
-                    newSeed.y = groundLevel - 150;
+                    newSeed.x = rightmostBranchX > 0 ? rightmostBranchX : seedX + 100;
+                    newSeed.y = rightmostBranchY > 0 ? rightmostBranchY : groundLevel - 150;
                     newSeed.angle = 0;
                     newSeed.velocityY = 0;
                     newSeed.active = true;
@@ -392,21 +396,27 @@ class AnimatedTreeDrawer {
                 break;
             }
 
-            case 4: {  // Seed dispersal with extreme zoom (0-150 frames)
+            case 4: {  // Seed dispersal with moderate zoom
                 updateFallingSeeds();
 
                 // Get the falling seed position
                 if (!fallingSeeds.empty() && fallingSeeds[0].active) {
                     Seed& seed = fallingSeeds[0];
 
-                    // Zoom dramatically into seed as it falls
-                    if (phaseTimer < 100) {
-                        // Extreme zoom from 1x to 15x
-                        zoomScale = 1.0 + (phaseTimer / 100.0) * 14.0;
+                    // Moderate zoom - 1x to 8x (reduced from 25x)
+                    if (phaseTimer < 60) {
+                        zoomScale = 1.0 + (phaseTimer / 60.0) * 7.0;
 
-                        // Center camera on the falling seed
-                        cameraOffsetX = screenWidth / 2 - static_cast<int>(seed.x);
-                        cameraOffsetY = screenHeight / 2 - static_cast<int>(seed.y) + 100;
+                        cameraOffsetX = screenWidth / 2 - static_cast<int>(seed.x * zoomScale);
+                        cameraOffsetY = screenHeight / 2 - static_cast<int>(seed.y * zoomScale);
+                    }
+                } else {
+                    // Seed has landed - hold zoom on the seed in ground
+                    if (phaseTimer < 90) {
+                        // Keep zoomed on seed in ground for a moment
+                        zoomScale = 8.0;
+                        cameraOffsetX = screenWidth / 2 - static_cast<int>(seedX * zoomScale);
+                        cameraOffsetY = screenHeight / 2 - static_cast<int>(seedY * zoomScale);
                     }
                 }
 
@@ -415,25 +425,32 @@ class AnimatedTreeDrawer {
                     if (seed.active) allFallen = false;
                 }
 
-                if (allFallen && phaseTimer > 30) {
+                // Wait a bit after seed lands before zooming out
+                if (allFallen && phaseTimer > 90) {
                     animationPhase = 5;
                     phaseTimer = 0;
                 }
                 break;
             }
 
-            case 5: {  // Zoom out and reset (0-40 frames)
-                if (phaseTimer < 40) {
-                    // Fade tree
-                    treeGrowthScale = 1.0 - (phaseTimer / 40.0);
-                    flowerScale = 1.0 - (phaseTimer / 40.0);
+            case 5: {  // Zoom out from seed in ground to initial view
+                if (phaseTimer < 50) {
+                    // Fade out old tree
+                    treeGrowthScale = 1.0 - (phaseTimer / 50.0);
+                    flowerScale = 1.0 - (phaseTimer / 50.0);
 
-                    // Zoom back out from 15x to 1x
-                    zoomScale = 15.0 - (phaseTimer / 40.0) * 14.0;
+                    // Zoom out from 8x back to 1x
+                    double zoomProgress = phaseTimer / 50.0;
+                    zoomScale = 8.0 - (zoomProgress * 7.0);
 
-                    // Return camera to center
-                    cameraOffsetX = cameraOffsetX * (1.0 - phaseTimer / 40.0);
-                    cameraOffsetY = cameraOffsetY * (1.0 - phaseTimer / 40.0);
+                    // Move camera from seed position back to center
+                    int targetOffsetX = 0;
+                    int targetOffsetY = 0;
+                    int startOffsetX = screenWidth / 2 - static_cast<int>(seedX * 8.0);
+                    int startOffsetY = screenHeight / 2 - static_cast<int>(seedY * 8.0);
+
+                    cameraOffsetX = startOffsetX + static_cast<int>((targetOffsetX - startOffsetX) * zoomProgress);
+                    cameraOffsetY = startOffsetY + static_cast<int>((targetOffsetY - startOffsetY) * zoomProgress);
                 } else {
                     resetAnimation();
                 }
@@ -464,6 +481,14 @@ class AnimatedTreeDrawer {
             int seedDrawX = static_cast<int>((seedX + drawOffsetX) * zoomScale - (zoomScale - 1.0) * screenWidth / 2);
             int seedDrawY = static_cast<int>((seedY + drawOffsetY) * zoomScale - (zoomScale - 1.0) * screenHeight / 2);
             drawSeed(seedDrawX, seedDrawY, 0, seedScale * zoomScale);
+
+            // Draw sprout ONLY during germination and ONLY when seed has started growing
+            if (animationPhase == 0 && phaseTimer > 20) {  // Start after 20 frames
+                setcolor(LIGHT_GREEN);
+                double sproutProgress = (phaseTimer - 20) / 20.0;  // Progress from 0 to 1
+                int sproutLength = static_cast<int>(sproutProgress * 20 * zoomScale);
+                line(seedDrawX, seedDrawY, seedDrawX, seedDrawY - sproutLength);
+            }
         }
 
         // MORPHING STAGES - all drawn together for smooth transition
@@ -498,10 +523,12 @@ class AnimatedTreeDrawer {
         // Draw falling seed - zoomed and centered
         for (const auto& seed : fallingSeeds) {
             if (seed.active) {
-                int seedDrawX = static_cast<int>((seed.x + drawOffsetX) * zoomScale - (zoomScale - 1.0) * screenWidth / 2);
-                int seedDrawY = static_cast<int>((seed.y + drawOffsetY) * zoomScale - (zoomScale - 1.0) * screenHeight / 2);
+                // Center the seed on screen during zoom
+                int centerX = screenWidth / 2;
+                int centerY = screenHeight / 2;
 
-                drawSeed(seedDrawX, seedDrawY, seed.angle, zoomScale * 1.5);
+                // Draw massive rotating seed at screen center - USE seed.angle!
+                drawSeed(centerX, centerY, seed.angle, zoomScale * 2.0);
             }
         }
 
